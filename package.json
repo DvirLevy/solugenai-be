@@ -6,9 +6,9 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "prisma generate && tsc",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "jest --runInBand",
     "test:watch": "jest --watch --runInBand",
     "prisma:generate": "prisma generate",

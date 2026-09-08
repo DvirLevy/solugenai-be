@@ -1,12 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
+    // node16 emits CommonJS (package.json has no "type": "module") while using Node's
+    // current resolution algorithm — the older "node"/"node10" modes are deprecated in TS 6.
+    "module": "node16",
+    "moduleResolution": "node16",
     "lib": ["ES2022"],
-    "rootDir": "src",
-    "outDir": "dist",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -14,10 +13,12 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "isolatedModules": true,
     "sourceMap": true,
     "declaration": false,
+    "noEmit": true,
     "types": ["node", "jest"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }
