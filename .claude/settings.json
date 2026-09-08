@@ -10,7 +10,8 @@
       "Bash(curl -s -o /dev/null -w \"backend health: %{http_code}\\\\n\" http://localhost:4000/api/health)",
       "Bash(docker exec *)",
       "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/change-password -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\",\"tempPassword\":\"Ro2@^aXV\",\"newPassword\":\"Bb12345678!\"}')",
-      "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\",\"password\":\"Bb12345678!\",\"rememberMe\":false}')"
+      "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\",\"password\":\"Bb12345678!\",\"rememberMe\":false}')",
+      "Bash(git check-ignore *)"
     ],
     "additionalDirectories": [
       "/Users/dvirlevy/Desktop/Development-Repositories/solugen-ai/sulogenai-assignment/frontend/src/services",

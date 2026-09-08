@@ -24,7 +24,6 @@ function translate(error: unknown): { status: number; body: ErrorResponse; expec
     };
   }
 
-  // A schema that reached the handler without going through `validate`.
   if (error instanceof ZodError) {
     return {
       status: 400,
@@ -33,7 +32,6 @@ function translate(error: unknown): { status: number; body: ErrorResponse; expec
     };
   }
 
-  // Token problems are reported without saying which check failed.
   if (error instanceof TokenExpiredError || error instanceof JsonWebTokenError) {
     return { status: 401, body: { message: 'Unauthorized.' }, expected: true };
   }
@@ -51,7 +49,6 @@ function translate(error: unknown): { status: number; body: ErrorResponse; expec
     }
   }
 
-  // Anything else is a bug or an outage: the client gets nothing but a generic message.
   return {
     status: 500,
     body: { message: 'Something went wrong. Please try again later.' },
@@ -68,13 +65,10 @@ export function errorHandler(
   error: unknown,
   req: Request,
   res: Response,
-  // Required for Express to recognise this as an error handler, even though it is unused.
   _next: NextFunction,
 ): void {
   const { status, body, expected } = translate(error);
 
-  // Server-side logging only, and deliberately never the request body or cookies —
-  // those carry passwords and tokens.
   if (!expected) {
     console.error(`[error] ${req.method} ${req.originalUrl} ->`, error);
   } else if (!config.isTest) {

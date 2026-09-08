@@ -15,8 +15,6 @@ export function createApp(): Express {
 
   app.disable('x-powered-by');
 
-  // Cookie auth is credentialed, so the origin must be an explicit allow-list entry —
-  // the CORS spec rejects a wildcard origin once credentials are enabled.
   app.use(
     cors({
       origin: config.frontendUrl,

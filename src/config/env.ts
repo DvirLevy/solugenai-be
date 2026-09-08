@@ -37,7 +37,6 @@ if (!parsed.success) {
   const details = parsed.error.issues
     .map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`)
     .join('\n');
-  // Fail fast and loudly: a half-configured auth server is worse than one that won't boot.
   console.error(`Invalid environment configuration:\n${details}`);
   process.exit(1);
 }
@@ -62,7 +61,6 @@ export const config = {
   isTest,
   port: env.PORT,
 
-  // The suite points Prisma at a separate database so it can truncate freely.
   databaseUrl: isTest && env.TEST_DATABASE_URL ? env.TEST_DATABASE_URL : env.DATABASE_URL,
 
   frontendUrl: env.FRONTEND_URL,
@@ -82,7 +80,6 @@ export const config = {
     expiresInMs: durationToMs(env.TEMP_PASSWORD_EXPIRATION),
   },
 
-  // Lowered under test only so bcrypt hashing doesn't dominate the suite's runtime.
   bcryptSaltRounds: isTest ? 4 : 12,
 
   emailLambda: {

@@ -1,23 +1,17 @@
-# Dependencies
 node_modules
 
-# Build output
 dist
 
-# Environment — the single .env holds real secrets and must never be committed.
-# There is deliberately no .env.example; see README for the required variable names.
 .env
 .env.*
+BE.txt
 
-# Test output
 coverage
 
-# Logs
 logs
 *.log
 npm-debug.log*
 
-# Editors / OS
 .vscode/*
 !.vscode/extensions.json
 .idea

@@ -20,7 +20,6 @@ docsRouter.use(
   swaggerUi.serve,
   swaggerUi.setup(specification, {
     customSiteTitle: 'Solugen Authentication API',
-    // "Try it out" has to send cookies, or every protected endpoint returns 401.
     swaggerOptions: { withCredentials: true, persistAuthorization: true },
   }),
 );

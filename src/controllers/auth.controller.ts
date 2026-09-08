@@ -80,7 +80,6 @@ export const changePassword: RequestHandler<unknown, { message: string }, Change
   async (req, res) => {
     await changePasswordService(req.body);
 
-    // Every session was revoked, so any cookies this client still holds are now dead.
     clearAuthCookies(res);
     res.status(200).json({ message: 'Your password has been changed. Please sign in.' });
   };

@@ -12,7 +12,6 @@ const emailSchema = z
   .trim()
   .min(1, 'Email is required.')
   .pipe(z.email('Please enter a valid email address.'))
-  // Stored and looked up lowercased, so Ada@Example.com and ada@example.com are one account.
   .transform((value) => value.toLowerCase());
 
 const passwordSchema = z
@@ -29,8 +28,6 @@ export const registerSchema = z.object({
 
 export const loginSchema = z.object({
   email: emailSchema,
-  // Deliberately not the full policy: an existing account may predate a stricter rule,
-  // and a rejected format here would leak that the password could never have been valid.
   password: z.string().min(1, 'Password is required.'),
   rememberMe: z.boolean().default(false),
 });

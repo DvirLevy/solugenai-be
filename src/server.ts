@@ -16,7 +16,6 @@ async function shutdown(signal: string): Promise<void> {
     void prisma.$disconnect().then(() => process.exit(0));
   });
 
-  // Don't let a hung connection block the shutdown indefinitely.
   setTimeout(() => process.exit(1), 10_000).unref();
 }
 
