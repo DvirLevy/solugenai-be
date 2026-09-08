@@ -16,7 +16,9 @@ export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
     datasourceUrl: config.databaseUrl,
-    log: config.isProduction || config.isTest ? ['error'] : ['error', 'warn'],
+    // Silent under test: the suite deliberately triggers handled failures such as a
+    // duplicate-email constraint, and logging those buries the real output.
+    log: config.isTest ? [] : config.isProduction ? ['error'] : ['error', 'warn'],
   });
 
 if (!config.isProduction) {
