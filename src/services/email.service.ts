@@ -40,9 +40,6 @@ export async function sendTemporaryPassword(to: string): Promise<string> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      // The Lambda allow-lists origins and rejects anything else with 403 — but a
-      // server-side fetch never sends this header on its own the way a browser does, so
-      // it has to be set explicitly to the same origin the Lambda already allows.
       Origin: config.frontendUrl,
       ...(apiKey ? { 'x-api-key': apiKey } : {}),
     },
@@ -50,21 +47,15 @@ export async function sendTemporaryPassword(to: string): Promise<string> {
       type: TEMPORARY_PASSWORD_TYPE,
       to,
       resetPasswordUrl: buildResetPasswordUrl(to),
-      // Minutes, matching how an email template reads naturally ("expires in 10 minutes").
-      // Derived from the same TEMP_PASSWORD_EXPIRATION that governs actual enforcement, so
-      // the two can never drift out of sync.
       expiresIn: Math.round(config.tempPassword.expiresInMs / 60_000),
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
-    // Status only — a Lambda error body could echo the address or the password back.
     throw new Error(`Email Lambda responded with status ${response.status}`);
   }
 
-  // The Lambda's response also carries an `info` field, which is discarded — the caller
-  // only ever needs the password.
   const payload = (await response.json()) as { temp_pass?: unknown };
 
   if (typeof payload.temp_pass !== 'string' || payload.temp_pass.length === 0) {

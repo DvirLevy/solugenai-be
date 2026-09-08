@@ -16,10 +16,6 @@ export interface IssuedRefreshToken {
 
 const REFRESH_TOKEN_BYTES = 32;
 
-// ---------------------------------------------------------------------------
-// Access Token
-// ---------------------------------------------------------------------------
-
 export function signAccessToken(userId: string): string {
   const options: SignOptions = {
     expiresIn: config.accessToken.expiresIn as SignOptions['expiresIn'],
@@ -38,10 +34,6 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
 
   return { userId: decoded.userId };
 }
-
-// ---------------------------------------------------------------------------
-// Refresh Token
-// ---------------------------------------------------------------------------
 
 export function generateRefreshToken(): string {
   return crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('base64url');
@@ -98,8 +90,6 @@ export async function rotateRefreshToken(rawToken: string): Promise<RotatedRefre
 
     if (!existing) return null;
 
-    // Deleting by id inside the transaction doubles as the claim on this token:
-    // a concurrent refresh with the same cookie deletes zero rows and backs off.
     const { count } = await tx.refreshToken.deleteMany({ where: { id: existing.id } });
     if (count === 0) return null;
 
