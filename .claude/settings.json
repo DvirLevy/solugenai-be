@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(node -e ' *)",
+      "Bash(awk -F'len=' '{if \\(NF>1\\) {gsub\\(/>$/,\"\",$2\\); print $1 \"len=\" length\\($2\\)-1 \">\"} else print}')",
+      "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\"}')",
+      "Bash(curl -s -i -X POST https://rm0q9is55k.execute-api.eu-north-1.amazonaws.com/prod -H 'Content-Type: application/json' -H 'x-api-key: 86CU147qhP3sA8Fvh9QJv5Wg0a4X2gVx7Kx8MJ2C' -d '{\"type\":\"TEMPORARY_PASSWORD\",\"to\":\"dvirlh1@gmail.com\",\"resetPasswordUrl\":\"http://localhost:5173/reset-password/?email=dvirlh1%40gmail.com\",\"expiresIn\":10}')",
+      "Bash(curl -s -i -X POST https://rm0q9is55k.execute-api.eu-north-1.amazonaws.com/prod -H 'Content-Type: application/json' -H 'x-api-key: 86CU147qhP3sA8Fvh9QJv5Wg0a4X2gVx7Kx8MJ2C' -H 'Origin: http://localhost:5173' -d '{\"type\":\"TEMPORARY_PASSWORD\",\"to\":\"dvirlh1@gmail.com\",\"resetPasswordUrl\":\"http://localhost:5173/reset-password/?email=dvirlh1%40gmail.com\",\"expiresIn\":10}')",
+      "Bash(curl -s -o /dev/null -w \"backend health: %{http_code}\\\\n\" http://localhost:4000/api/health)",
+      "Bash(docker exec *)",
+      "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/change-password -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\",\"tempPassword\":\"Ro2@^aXV\",\"newPassword\":\"Bb12345678!\"}')",
+      "Bash(curl -s -w ' [HTTP %{http_code}]\\\\n' -X POST http://localhost:4000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"dvirlh1@gmail.com\",\"password\":\"Bb12345678!\",\"rememberMe\":false}')"
+    ],
+    "additionalDirectories": [
+      "/Users/dvirlevy/Desktop/Development-Repositories/solugen-ai/sulogenai-assignment/frontend/src/services",
+      "/Users/dvirlevy/Desktop/Development-Repositories/solugen-ai/sulogenai-assignment/frontend/tests/mocks",
+      "/Users/dvirlevy/Desktop/Development-Repositories/solugen-ai/sulogenai-assignment/frontend/tests/pages"
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 import { Prisma, type User } from '@prisma/client';
+import { config } from '../config/env';
 import { prisma } from '../db/prisma';
 import type {
   ChangePasswordInput,
@@ -11,6 +12,7 @@ import { equalisePasswordTiming, hashPassword, verifyPassword } from '../utils/p
 import { sendTemporaryPassword } from './email.service';
 import {
   type IssuedRefreshToken,
+  generateRefreshToken,
   issueRefreshToken,
   revokeRefreshToken,
   rotateRefreshToken,
@@ -44,6 +46,45 @@ export function toSafeUser(user: User): SafeUser {
     email: user.email,
     mustChangePassword: user.mustChangePassword,
   };
+}
+
+/**
+ * True only when the account is mid-recovery (`mustChangePassword`) and that recovery's
+ * window has passed. Always false for a real password, since `tempPasswordExpiresAt` is
+ * null for one — this can never misfire and reject a normal password.
+ */
+function isTempPasswordExpired(user: User): boolean {
+  return (
+    user.mustChangePassword &&
+    user.tempPasswordExpiresAt !== null &&
+    user.tempPasswordExpiresAt.getTime() <= Date.now()
+  );
+}
+
+/**
+ * Burns an expired temporary password the moment someone tries it, so the same value can
+ * never be replayed even if the caller keeps retrying. `mustChangePassword` stays true —
+ * the account still needs a temp password, just not this one — and the user's only path
+ * forward is a fresh POST /auth/forgot-password.
+ *
+ * Best-effort: this runs on a path that is about to reject the request with a 401
+ * regardless, so a failure here must not turn that 401 into a 500.
+ */
+async function invalidateExpiredTempPassword(userId: string): Promise<void> {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: await hashPassword(generateRefreshToken()),
+        tempPasswordExpiresAt: null,
+      },
+    });
+  } catch (error) {
+    console.error(
+      '[error] failed to invalidate expired temporary password:',
+      error instanceof Error ? error.message : 'unknown error',
+    );
+  }
 }
 
 function createSession(user: User, rememberMe: boolean): Promise<AuthSession> {
@@ -93,6 +134,14 @@ export async function loginUser(input: LoginInput): Promise<AuthSession> {
   }
 
   if (!(await verifyPassword(input.password, user.passwordHash))) {
+    throw ApiError.unauthorized(INVALID_CREDENTIALS);
+  }
+
+  // A correct-but-expired temporary password is rejected exactly like a wrong one — the
+  // 10-minute window is a security boundary, not just a change-password reminder, so a
+  // leaked email can't be used to sign in indefinitely just by never "finishing" the reset.
+  if (isTempPasswordExpired(user)) {
+    await invalidateExpiredTempPassword(user.id);
     throw ApiError.unauthorized(INVALID_CREDENTIALS);
   }
 
@@ -174,10 +223,7 @@ export async function requestPasswordReset(input: ForgotPasswordInput): Promise<
   let temporaryPassword: string;
 
   try {
-    temporaryPassword = await sendTemporaryPassword({
-      to: user.email,
-      fullName: user.fullName,
-    });
+    temporaryPassword = await sendTemporaryPassword(user.email);
   } catch (error) {
     // Reported to the operator, never to the caller: a distinguishable failure here
     // would reveal that the address exists. Logs the reason only — never the password.
@@ -193,6 +239,7 @@ export async function requestPasswordReset(input: ForgotPasswordInput): Promise<
     data: {
       passwordHash: await hashPassword(temporaryPassword),
       mustChangePassword: true,
+      tempPasswordExpiresAt: new Date(Date.now() + config.tempPassword.expiresInMs),
     },
   });
 }
@@ -214,6 +261,15 @@ export async function changePassword(input: ChangePasswordInput): Promise<void> 
     throw ApiError.unauthorized(INVALID_TEMPORARY_PASSWORD);
   }
 
+  // Distinguishing "expired" from "wrong" is safe here specifically: the caller just proved
+  // — via a successful bcrypt comparison — that they know the correct temporary password.
+  // Telling them it expired reveals nothing they didn't already know, and points them to
+  // forgot-password instead of leaving them to keep retrying a value that can never work.
+  if (isTempPasswordExpired(user)) {
+    await invalidateExpiredTempPassword(user.id);
+    throw ApiError.unauthorized('Temporary password has expired. Please request a new one.');
+  }
+
   // The temporary password travelled by email in plain text, so keeping it would leave
   // the account in exactly the state this flow exists to get out of.
   if (input.tempPassword === input.newPassword) {
@@ -227,7 +283,7 @@ export async function changePassword(input: ChangePasswordInput): Promise<void> 
   await prisma.$transaction([
     prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, mustChangePassword: false },
+      data: { passwordHash, mustChangePassword: false, tempPasswordExpiresAt: null },
     }),
     // Anyone holding a session opened with the temporary password loses it.
     prisma.refreshToken.deleteMany({ where: { userId: user.id } }),

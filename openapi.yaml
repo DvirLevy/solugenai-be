@@ -130,6 +130,11 @@ paths:
 
         `rememberMe` selects the Refresh Token lifetime only. A user may hold several
         concurrent sessions across different browsers and devices.
+
+        If the account is in password recovery (`mustChangePassword: true`) and the
+        temporary password has passed its `TEMP_PASSWORD_EXPIRATION` window, sign-in is
+        rejected with the same generic `401` as a wrong password — the temporary password is
+        not usable for anything, including login, once expired.
       security: []
       requestBody:
         required: true
@@ -255,6 +260,30 @@ paths:
         The stored password is replaced only **after** the Lambda confirms delivery, so a
         failed send cannot lock a user out with a password they never received.
 
+        The temporary password is valid for `TEMP_PASSWORD_EXPIRATION` (10 minutes by
+        default) from the moment this endpoint succeeds. Once that window passes it is
+        rejected everywhere — both `/auth/login` and `/auth/change-password` — and the
+        stored hash is invalidated the moment either endpoint sees it used past expiry, so
+        the same value can never be replayed. Calling this endpoint again always issues a
+        fresh temporary password and resets the window, regardless of the previous one's state.
+
+        The full payload sent to the Lambda (not this endpoint's own request body — see
+        below) is:
+
+        ```json
+        {
+          "type": "TEMPORARY_PASSWORD",
+          "to": "user@example.com",
+          "resetPasswordUrl": "http://localhost:5173/reset-password/?email=user%40example.com",
+          "expiresIn": 10
+        }
+        ```
+
+        `resetPasswordUrl` is built from `FRONTEND_URL`, so it points at the right place in
+        every environment. `expiresIn` is minutes, derived from the same
+        `TEMP_PASSWORD_EXPIRATION` that governs actual enforcement, so the value shown in the
+        email can never drift from the value the backend enforces.
+
         Always returns the same `200` whether or not the address has an account, and never
         includes the temporary password. The user copies it from their inbox and completes
         recovery at `/auth/change-password`.
@@ -291,6 +320,13 @@ paths:
         `newPassword` must satisfy the same policy as registration and must differ from the
         temporary one. On success `mustChangePassword` is cleared and **every** session for
         that user is revoked.
+
+        The temporary password expires `TEMP_PASSWORD_EXPIRATION` after it was issued (see
+        `/auth/forgot-password`). A correct-but-expired value is rejected with a distinct
+        `401` message rather than the generic invalid-credentials one — this is safe because
+        successfully verifying it already proves the caller knows the correct value, so
+        naming the reason reveals nothing new and points them back to `/auth/forgot-password`.
+        That failed attempt also invalidates the expired hash, so it cannot be retried.
       security: []
       requestBody:
         required: true
@@ -311,13 +347,21 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           description: |
-            The email or temporary password is wrong. Identical for both cases.
+            Either the email/temporary-password pair is wrong (identical response for both),
+            or the temporary password was correct but has expired.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                message: Invalid email or temporary password.
+              examples:
+                invalidCredentials:
+                  summary: Wrong email or temporary password
+                  value:
+                    message: Invalid email or temporary password.
+                expiredTemporaryPassword:
+                  summary: Correct temporary password, past its 10-minute window
+                  value:
+                    message: Temporary password has expired. Please request a new one.
         '500':
           $ref: '#/components/responses/ServerError'
 

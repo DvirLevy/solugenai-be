@@ -113,6 +113,7 @@ Required variable **names** (values are yours to supply — none are listed here
 | `ACCESS_TOKEN_EXPIRATION` | Access Token lifetime, e.g. `15m`. |
 | `REFRESH_TOKEN_SHORT_EXPIRATION` | Refresh Token lifetime when Remember Me is **off**, e.g. `1d`. |
 | `REFRESH_TOKEN_REMEMBER_ME_EXPIRATION` | Refresh Token lifetime when Remember Me is **on**, e.g. `30d`. |
+| `TEMP_PASSWORD_EXPIRATION` | How long a Lambda-issued temporary password stays usable, e.g. `10m`. |
 | `EMAIL_LAMBDA_URL` | Endpoint of the AWS Lambda that emails temporary passwords. Only needed for forgot-password. |
 | `EMAIL_LAMBDA_API_KEY` | Sent as `x-api-key` to that Lambda. Optional. |
 
@@ -157,7 +158,8 @@ npm run prisma:studio      # browse the data
 The schema defines two models:
 
 - **`User`** — `id`, `fullName`, `email` (unique), `passwordHash`, `mustChangePassword`,
-  `createdAt`, `updatedAt`
+  `tempPasswordExpiresAt` (nullable — set only while `passwordHash` holds a temporary
+  password), `createdAt`, `updatedAt`
 - **`RefreshToken`** — `id`, `tokenHash` (unique), `userId`, `expiresAt`, `createdAt`
 
 `User 1→N RefreshToken` with `onDelete: Cascade`, so deleting a user removes their sessions.
@@ -250,7 +252,7 @@ flowchart TD
     CORS --> AUTH --> ROUTES --> PRISMA --> DB
     ROUTES --> ERR --> FE
 
-    ROUTES -->|"forgot-password: { to, fullName }"| LAMBDA
+    ROUTES -->|"{ type: TEMPORARY_PASSWORD, to }"| LAMBDA
     LAMBDA -->|"emails the temporary password"| MAIL
     LAMBDA -->|"returns it for bcrypt hashing"| ROUTES
 ```
@@ -386,11 +388,53 @@ never includes or logs the temporary password.
 valid session by definition, so the temporary password from their email is the credential that
 authorises the change. This is a deliberate deviation from a strictly token-protected endpoint.
 
+### Temporary password expiry
+
+The temporary password is valid for `TEMP_PASSWORD_EXPIRATION` (10 minutes by default),
+starting from the moment `forgot-password` succeeds. This limit is a genuine security
+boundary, not just a nudge to hurry up:
+
+- **It expires everywhere it could be used** — both `/auth/login` and `/auth/change-password`
+  reject it once the window has passed, with a bare `401`. If only `change-password` enforced
+  the limit, someone who intercepted the email could still sign in with it indefinitely, just
+  never able to "finish" the reset — the 10 minutes would protect nothing.
+- **Login treats an expired temporary password exactly like a wrong one** — same status, same
+  message — consistent with every other login failure being indistinguishable.
+- **`change-password` reports expiry with a distinct message** ("Temporary password has
+  expired. Please request a new one.") instead of the generic invalid-credentials one. This is
+  safe specifically because the caller just proved, via a successful bcrypt comparison, that
+  they know the correct (now-expired) value — naming the reason reveals nothing they didn't
+  already know, and tells them what to do next.
+- **The moment an expired temporary password is used anywhere, it is invalidated** —
+  `passwordHash` is immediately overwritten with a fresh, unguessable random hash, so the same
+  value can never be tried again. There is no background sweep or scheduled job; expiry is
+  checked lazily, at the point of use, keeping the implementation free of extra infrastructure.
+- **Calling `forgot-password` again always works**, regardless of whether the previous
+  temporary password expired, was invalidated, or is still live — it unconditionally issues a
+  new one and resets the window.
+
 ### Lambda integration
 
 All contact with the Lambda is confined to `src/services/email.service.ts` — controllers never
-call it directly. It posts `{ to, fullName }` to `EMAIL_LAMBDA_URL` with an `x-api-key` header
-and a 10-second timeout, and expects `{ temporaryPassword }` back.
+call it directly. It posts the following to `EMAIL_LAMBDA_URL` with an `x-api-key` header, an
+`Origin` header set to `FRONTEND_URL` (the Lambda allow-lists origins and otherwise rejects the
+call with `403` — a server-side `fetch` never sends this header on its own the way a browser
+does, so it has to be set explicitly), and a 10-second timeout:
+
+```json
+{
+  "type": "TEMPORARY_PASSWORD",
+  "to": "user@example.com",
+  "resetPasswordUrl": "http://localhost:5173/reset-password/?email=user%40example.com",
+  "expiresIn": 10
+}
+```
+
+`resetPasswordUrl` is built from `FRONTEND_URL`, not hardcoded, so it points at the right
+place in every environment. `expiresIn` is minutes, derived from the same
+`TEMP_PASSWORD_EXPIRATION` that governs actual enforcement — the value shown in the email and
+the value the backend enforces can never drift apart. It reads `temp_pass` from the JSON
+response (an `info` field is also present and ignored).
 
 The backend owns generation's *consequences* (hashing, storage, the `mustChangePassword` flag);
 the Lambda owns generating the value and sending the email. Because the contract lives in one
@@ -503,6 +547,9 @@ old password intact when the Lambda fails.
   throwaway bcrypt comparison when the account does not exist, so response timing does not
   reveal which addresses are registered.
 - `forgot-password` returns the same response whether or not the account exists.
+- A temporary password expires after `TEMP_PASSWORD_EXPIRATION` and stops working everywhere
+  — login and change-password alike — with the expired hash invalidated on first use so it
+  can never be replayed.
 - Registration relies on the database unique constraint rather than a pre-flight lookup, so two
   simultaneous signups for one address cannot both succeed.
 - Every error passes through one handler that emits `{ message, errors? }` and nothing else —

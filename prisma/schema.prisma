@@ -8,13 +8,17 @@ datasource db {
 }
 
 model User {
-  id                 String   @id @default(uuid())
-  fullName           String
-  email              String   @unique
-  passwordHash       String
-  mustChangePassword Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                    String    @id @default(uuid())
+  fullName              String
+  email                 String    @unique
+  passwordHash          String
+  mustChangePassword    Boolean   @default(false)
+  /// Set only while passwordHash holds a Lambda-issued temporary password; null for a
+  /// real password. Checked lazily at login and change-password — past this instant,
+  /// the temp password is treated as invalid and its hash is overwritten on next use.
+  tempPasswordExpiresAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   refreshTokens RefreshToken[]
 

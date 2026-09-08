@@ -25,6 +25,7 @@ const envSchema = z.object({
   ACCESS_TOKEN_EXPIRATION: duration.default('15m'),
   REFRESH_TOKEN_SHORT_EXPIRATION: duration.default('1d'),
   REFRESH_TOKEN_REMEMBER_ME_EXPIRATION: duration.default('30d'),
+  TEMP_PASSWORD_EXPIRATION: duration.default('10m'),
 
   EMAIL_LAMBDA_URL: optionalString,
   EMAIL_LAMBDA_API_KEY: optionalString,
@@ -75,6 +76,10 @@ export const config = {
   refreshToken: {
     shortExpiresInMs: durationToMs(env.REFRESH_TOKEN_SHORT_EXPIRATION),
     rememberMeExpiresInMs: durationToMs(env.REFRESH_TOKEN_REMEMBER_ME_EXPIRATION),
+  },
+
+  tempPassword: {
+    expiresInMs: durationToMs(env.TEMP_PASSWORD_EXPIRATION),
   },
 
   // Lowered under test only so bcrypt hashing doesn't dominate the suite's runtime.

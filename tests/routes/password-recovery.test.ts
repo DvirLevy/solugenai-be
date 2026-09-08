@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { config } from '../../src/config/env';
 import { createApp } from '../../src/app';
 import { prisma } from '../../src/db/prisma';
 import { sendTemporaryPassword } from '../../src/services/email.service';
@@ -33,6 +34,14 @@ function registerUser() {
   return request(app).post('/api/auth/register').send(VALID_USER);
 }
 
+/** Simulates the 10-minute window having passed, without actually waiting for it. */
+function expireTempPassword(email: string) {
+  return prisma.user.update({
+    where: { email },
+    data: { tempPasswordExpiresAt: new Date(Date.now() - 1000) },
+  });
+}
+
 describe('POST /api/auth/forgot-password', () => {
   it('asks the Lambda to email the user and stores a hash of what it returned', async () => {
     await registerUser();
@@ -42,10 +51,7 @@ describe('POST /api/auth/forgot-password', () => {
       .send({ email: VALID_USER.email });
 
     expect(response.status).toBe(200);
-    expect(sendTemporaryPasswordMock).toHaveBeenCalledWith({
-      to: VALID_USER.email,
-      fullName: VALID_USER.fullName,
-    });
+    expect(sendTemporaryPasswordMock).toHaveBeenCalledWith(VALID_USER.email);
 
     const user = await prisma.user.findUnique({ where: { email: VALID_USER.email } });
     expect(user?.mustChangePassword).toBe(true);
@@ -114,6 +120,16 @@ describe('POST /api/auth/forgot-password', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.errors.email).toBe('Please enter a valid email address.');
+  });
+
+  it('gives the temporary password a roughly 10-minute window', async () => {
+    await registerUser();
+
+    await request(app).post('/api/auth/forgot-password').send({ email: VALID_USER.email });
+
+    const user = await prisma.user.findUnique({ where: { email: VALID_USER.email } });
+    const remainingMs = user!.tempPasswordExpiresAt!.getTime() - Date.now();
+    expect(remainingMs).toBeCloseTo(config.tempPassword.expiresInMs, -3);
   });
 });
 
@@ -247,5 +263,145 @@ describe('POST /api/auth/change-password', () => {
     expect(body).not.toContain(NEW_PASSWORD);
     expect(body).not.toContain(TEMPORARY_PASSWORD);
     expect(body).not.toMatch(/\$2[aby]\$/);
+  });
+
+  it('rejects a correct-but-expired temporary password with a distinct message', async () => {
+    await startRecovery();
+    await expireTempPassword(VALID_USER.email);
+
+    const response = await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      message: 'Temporary password has expired. Please request a new one.',
+    });
+
+    // The window is a real security boundary — the flow did not quietly go through anyway.
+    const user = await prisma.user.findUnique({ where: { email: VALID_USER.email } });
+    expect(user?.mustChangePassword).toBe(true);
+  });
+
+  it('burns the expired temporary password so it cannot be retried', async () => {
+    await startRecovery();
+    await expireTempPassword(VALID_USER.email);
+    await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    // A second attempt with the very same value now fails for the ordinary reason —
+    // the hash underneath it has already been overwritten with an unguessable one.
+    const retry = await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    expect(retry.status).toBe(401);
+    expect(retry.body).toEqual({ message: 'Invalid email or temporary password.' });
+  });
+
+  it('lets the user recover normally with a fresh temporary password after expiry', async () => {
+    await startRecovery();
+    await expireTempPassword(VALID_USER.email);
+    await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    const FRESH_TEMPORARY_PASSWORD = 'Tmp-fresh1!Zz';
+    sendTemporaryPasswordMock.mockResolvedValue(FRESH_TEMPORARY_PASSWORD);
+    await request(app).post('/api/auth/forgot-password').send({ email: VALID_USER.email });
+
+    const response = await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: FRESH_TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('does not reject a temporary password used well within the window', async () => {
+    await startRecovery();
+
+    const response = await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe('signing in with a temporary password', () => {
+  const NEW_PASSWORD = 'Bernoulli7#';
+
+  async function startRecovery() {
+    await registerUser();
+    await request(app).post('/api/auth/forgot-password').send({ email: VALID_USER.email });
+  }
+
+  it('succeeds within the window and reports mustChangePassword', async () => {
+    await startRecovery();
+
+    const response = await request(app)
+      .post('/api/auth/login')
+      .send({ email: VALID_USER.email, password: TEMPORARY_PASSWORD, rememberMe: false });
+
+    expect(response.status).toBe(200);
+    expect(response.body.mustChangePassword).toBe(true);
+  });
+
+  it('rejects it once expired, indistinguishably from a wrong password', async () => {
+    await startRecovery();
+    await expireTempPassword(VALID_USER.email);
+
+    const response = await request(app)
+      .post('/api/auth/login')
+      .send({ email: VALID_USER.email, password: TEMPORARY_PASSWORD, rememberMe: false });
+
+    // Not the change-password "expired" message — login never distinguishes failure reasons.
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ message: 'Invalid email or password.' });
+  });
+
+  it('burns the expired temporary password on the failed login attempt', async () => {
+    await startRecovery();
+    await expireTempPassword(VALID_USER.email);
+    await request(app)
+      .post('/api/auth/login')
+      .send({ email: VALID_USER.email, password: TEMPORARY_PASSWORD, rememberMe: false });
+
+    // The 10-minute limit is a real security boundary, not just a change-password nudge —
+    // an intercepted email cannot be used to sign in indefinitely by never "finishing" the reset.
+    const stillWorks = await request(app).post('/api/auth/change-password').send({
+      email: VALID_USER.email,
+      tempPassword: TEMPORARY_PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(stillWorks.status).toBe(401);
+    expect(stillWorks.body).toEqual({ message: 'Invalid email or temporary password.' });
+  });
+
+  it('does not open a session when the temporary password has expired', async () => {
+    await startRecovery();
+    // Registration signs the user in, so one session already exists before this attempt.
+    const sessionsBefore = await prisma.refreshToken.count();
+    await expireTempPassword(VALID_USER.email);
+
+    await request(app)
+      .post('/api/auth/login')
+      .send({ email: VALID_USER.email, password: TEMPORARY_PASSWORD, rememberMe: false });
+
+    // The rejected login must not have opened a new one.
+    expect(await prisma.refreshToken.count()).toBe(sessionsBefore);
   });
 });
