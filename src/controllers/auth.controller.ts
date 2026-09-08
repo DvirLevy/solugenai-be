@@ -1,13 +1,21 @@
 import type { Request, RequestHandler, Response } from 'express';
 import { getAuthenticatedUserId } from '../middleware/authenticate';
-import type { LoginInput, RegisterInput } from '../schemas/auth.schema';
+import type {
+  ChangePasswordInput,
+  ForgotPasswordInput,
+  LoginInput,
+  RegisterInput,
+} from '../schemas/auth.schema';
 import {
   type AuthSession,
   type SafeUser,
+  changePassword as changePasswordService,
   getUserById,
   loginUser,
   logoutUser,
+  refreshSession,
   registerUser,
+  requestPasswordReset,
 } from '../services/auth.service';
 import {
   REFRESH_TOKEN_COOKIE,
@@ -46,3 +54,33 @@ export const logout: RequestHandler = async (req: Request, res) => {
   clearAuthCookies(res);
   res.status(204).end();
 };
+
+/** Both cookies are replaced: a new Access Token, and the rotated Refresh Token. */
+export const refresh: RequestHandler<unknown, SafeUser> = async (req, res) => {
+  const session = await refreshSession(req.cookies?.[REFRESH_TOKEN_COOKIE]);
+
+  sendSession(res, session);
+  res.status(200).json(session.user);
+};
+
+/**
+ * Always answers the same way, whether or not the address belongs to an account, so the
+ * endpoint reveals nothing about who is registered.
+ */
+export const forgotPassword: RequestHandler<unknown, { message: string }, ForgotPasswordInput> =
+  async (req, res) => {
+    await requestPasswordReset(req.body);
+
+    res.status(200).json({
+      message: 'If that account exists, a temporary password has been emailed to it.',
+    });
+  };
+
+export const changePassword: RequestHandler<unknown, { message: string }, ChangePasswordInput> =
+  async (req, res) => {
+    await changePasswordService(req.body);
+
+    // Every session was revoked, so any cookies this client still holds are now dead.
+    clearAuthCookies(res);
+    res.status(200).json({ message: 'Your password has been changed. Please sign in.' });
+  };
