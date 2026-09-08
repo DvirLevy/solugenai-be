@@ -1,0 +1,527 @@
+openapi: 3.0.3
+
+info:
+  title: Solugen Authentication API
+  version: 1.0.0
+  description: |
+    JWT authentication built on a **short-lived Access Token** plus a **longer-lived,
+    rotating Refresh Token** that is persisted server-side.
+
+    ### Cookies
+
+    Neither token is ever returned in a response body. Both are set as `HttpOnly` cookies,
+    so frontend JavaScript cannot read them:
+
+    | Cookie | Path | Lifetime |
+    |---|---|---|
+    | `access_token` | `/` | Short (`ACCESS_TOKEN_EXPIRATION`, default 15m) |
+    | `refresh_token` | `/api/auth` | `REFRESH_TOKEN_SHORT_EXPIRATION` or `REFRESH_TOKEN_REMEMBER_ME_EXPIRATION` |
+
+    `refresh_token` is scoped to `/api/auth` rather than `/` so it is not attached to every
+    API request. It is not narrowed further to `/api/auth/refresh` because `POST /api/auth/logout`
+    must also receive it in order to delete the matching row from PostgreSQL.
+
+    ### Remember Me
+
+    `rememberMe` on login selects **only** the Refresh Token lifetime. The Access Token
+    lifetime is identical either way — Remember Me is never implemented by issuing a
+    long-lived Access Token.
+
+    ### Refresh and rotation
+
+    When an Access Token expires, protected routes return `401`. The client then calls
+    `POST /api/auth/refresh`, which validates the Refresh Token, **deletes it**, issues a
+    replacement, and sets both cookies again. A Refresh Token therefore works exactly once.
+    The replacement inherits the original expiry, so refreshing cannot extend a session
+    indefinitely.
+
+    Every refresh failure — missing, unknown, already-used or expired — returns an
+    identical `401`. Redirecting the user afterwards is the frontend's responsibility.
+
+    ### Clients must send credentials
+
+    Cookie auth requires `credentials: 'include'` (fetch) or `withCredentials: true` (axios).
+    CORS is restricted to the exact `FRONTEND_URL` origin; a wildcard is not permitted
+    alongside credentials.
+
+servers:
+  - url: http://localhost:4000/api
+    description: Local development
+
+tags:
+  - name: Authentication
+    description: Registration, sessions, and password recovery
+  - name: System
+    description: Service health
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness and database readiness
+      description: Returns `503` when the database cannot be reached, so an orchestrator gets a meaningful signal.
+      security: []
+      responses:
+        '200':
+          description: Service healthy and database reachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: degraded
+                database: disconnected
+                uptime: 42
+                timestamp: '2026-01-01T12:00:00.000Z'
+
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Create an account and start a session
+      description: |
+        Creates the user and signs them straight in, setting both cookies.
+
+        The email is trimmed and lowercased before storage, so casing cannot be used to
+        create a duplicate account.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created. Sets `access_token` and `refresh_token`.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/AuthCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: An account already exists for that email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                message: An account with this email already exists.
+                errors:
+                  email: An account with this email already exists.
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Sign in
+      description: |
+        Verifies the password with bcrypt and opens a session.
+
+        `rememberMe` selects the Refresh Token lifetime only. A user may hold several
+        concurrent sessions across different browsers and devices.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in. Sets `access_token` and `refresh_token`.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/AuthCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: |
+            Invalid credentials. The response is identical for a wrong password and for an
+            email that has no account, so the endpoint cannot be used to discover which
+            addresses are registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                message: Invalid email or password.
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Issue a new Access Token and rotate the Refresh Token
+      description: |
+        Reads `refresh_token` from the cookie, hashes it with the same deterministic
+        SHA-256 used for storage, and looks up the matching row.
+
+        On success the old row is **deleted** and replaced with a new token, so the
+        presented one can never be redeemed twice. Both cookies are re-issued. The
+        replacement keeps the original expiry, so a session still ends a fixed period
+        after login.
+
+        Takes no request body — the cookie is the credential.
+      security:
+        - refreshTokenCookie: []
+      responses:
+        '200':
+          description: New Access Token issued and Refresh Token rotated.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/AuthCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/RefreshFailed'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: End the current session
+      description: |
+        Deletes the hashed Refresh Token from PostgreSQL **and** clears both cookies, so the
+        token cannot be used again. Only the session that logged out is ended — other
+        devices stay signed in.
+
+        Idempotent: succeeds even with no cookies at all.
+
+        Note that the Access Token is stateless and stays cryptographically valid until it
+        expires; its short lifetime is what bounds that window.
+      security:
+        - refreshTokenCookie: []
+      responses:
+        '204':
+          description: Session ended and both cookies cleared
+          headers:
+            Set-Cookie:
+              description: Expires `access_token` and `refresh_token`.
+              schema:
+                type: string
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get the signed-in user
+      description: |
+        Authenticated with the **Access Token only**. A Refresh Token presented here is
+        rejected — its sole privilege is redeeming a new Access Token at `/auth/refresh`.
+
+        On `401` the client should attempt `POST /auth/refresh` and retry.
+      security:
+        - accessTokenCookie: []
+      responses:
+        '200':
+          description: The signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/forgot-password:
+    post:
+      tags: [Authentication]
+      summary: Email a temporary password
+      description: |
+        Asks the configured AWS Lambda to email a temporary password to the account. The
+        Lambda generates it and returns it to the backend, which bcrypt-hashes it into
+        `passwordHash` and sets `mustChangePassword` to `true`.
+
+        The stored password is replaced only **after** the Lambda confirms delivery, so a
+        failed send cannot lock a user out with a password they never received.
+
+        Always returns the same `200` whether or not the address has an account, and never
+        includes the temporary password. The user copies it from their inbox and completes
+        recovery at `/auth/change-password`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '200':
+          description: Generic acknowledgement, identical for known and unknown addresses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                message: If that account exists, a temporary password has been emailed to it.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/change-password:
+    post:
+      tags: [Authentication]
+      summary: Replace a temporary password with a permanent one
+      description: |
+        Public rather than Access Token protected: a user in recovery has no valid session,
+        and the temporary password from their email is the credential that authorises the
+        change.
+
+        `newPassword` must satisfy the same policy as registration and must differ from the
+        temporary one. On success `mustChangePassword` is cleared and **every** session for
+        that user is revoked.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed; all sessions revoked and cookies cleared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                message: Your password has been changed. Please sign in.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: |
+            The email or temporary password is wrong. Identical for both cases.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                message: Invalid email or temporary password.
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  securitySchemes:
+    accessTokenCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Short-lived JWT. `HttpOnly`, `Path=/`. Carries only a `userId` claim.
+    refreshTokenCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: |
+        Opaque 256-bit random value — not a JWT. `HttpOnly`, `Path=/api/auth`. Only its
+        SHA-256 hash is stored server-side; the raw value exists solely in this cookie.
+
+  headers:
+    AuthCookies:
+      description: |
+        Sets `access_token` (`Path=/`) and `refresh_token` (`Path=/api/auth`). Both are
+        `HttpOnly`; both are `Secure` with `SameSite=None` in production, and
+        `SameSite=Lax` without `Secure` in development so localhost works over plain HTTP.
+      schema:
+        type: string
+
+  schemas:
+    User:
+      type: object
+      description: The only user representation the API returns. Never includes a password hash.
+      required: [id, fullName, email, mustChangePassword]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3f1c9b2e-8a4d-4c77-9f10-2b6e5d0a1c34
+        fullName:
+          type: string
+          example: Ada Lovelace
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+        mustChangePassword:
+          type: boolean
+          description: True after a forgot-password reset, until `/auth/change-password` succeeds.
+          example: false
+
+    RegisterRequest:
+      type: object
+      required: [fullName, email, password]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          description: Trimmed; at least 2 characters.
+          example: Ada Lovelace
+        email:
+          type: string
+          format: email
+          description: Trimmed and lowercased before storage.
+          example: ada@example.com
+        password:
+          type: string
+          minLength: 8
+          description: At least 8 characters, including at least one number and one symbol.
+          example: Analytical1!
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+        password:
+          type: string
+          example: Analytical1!
+        rememberMe:
+          type: boolean
+          default: false
+          description: |
+            Selects the longer Refresh Token lifetime. Does **not** change the Access Token
+            lifetime.
+          example: false
+
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+
+    ChangePasswordRequest:
+      type: object
+      required: [email, tempPassword, newPassword]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+        tempPassword:
+          type: string
+          description: The temporary password received by email.
+          example: Tmp-9f3a!zQ2
+        newPassword:
+          type: string
+          minLength: 8
+          description: Same policy as registration, and must differ from `tempPassword`.
+          example: Bernoulli7#
+        confirmPassword:
+          type: string
+          description: Optional. Validated only when supplied.
+          example: Bernoulli7#
+
+    Health:
+      type: object
+      required: [status, database, uptime, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+          enum: [connected, disconnected]
+        uptime:
+          type: integer
+          description: Process uptime in seconds.
+          example: 42
+        timestamp:
+          type: string
+          format: date-time
+
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    Error:
+      type: object
+      description: |
+        The shape of every error response. Stack traces, Prisma internals, tokens and
+        password hashes never appear here.
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Safe to display to an end user.
+          example: Validation failed.
+        errors:
+          type: object
+          description: Present on validation failures; maps a field name to its message.
+          additionalProperties:
+            type: string
+          example:
+            email: Please enter a valid email address.
+            password: Password must contain at least one number.
+
+  responses:
+    ValidationError:
+      description: The request body failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Validation failed.
+            errors:
+              email: Please enter a valid email address.
+              password: Password must be at least 8 characters.
+
+    Unauthorized:
+      description: |
+        The Access Token is missing, malformed or expired. The body is identical in every
+        case, so nothing is revealed about which check failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Unauthorized.
+
+    RefreshFailed:
+      description: |
+        The Refresh Token is missing, unknown, already used, or expired — all reported
+        identically. The client should send the user to the login screen.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Unauthorized.
+
+    ServerError:
+      description: Unexpected server error, reported without internal detail
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            message: Something went wrong. Please try again later.

@@ -1,0 +1,23 @@
+node_modules
+dist
+coverage
+
+.git
+.gitignore
+
+# Secrets are supplied at run time by docker-compose (env_file), never baked into the image.
+.env
+.env.*
+
+tests
+jest.config.js
+
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+README.md
+*.log
+.DS_Store
+.vscode
+.idea

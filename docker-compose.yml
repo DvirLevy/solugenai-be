@@ -1,8 +1,7 @@
 # All configuration is read from the single .env file in this directory.
-# The `backend` service is added in a later task; `db` is defined now so the
-# database can be run on its own:
 #
-#   docker compose up -d db     # PostgreSQL only, backend runs locally
+#   docker compose up -d db      # PostgreSQL only; run the backend locally with `npm run dev`
+#   docker compose up --build    # the whole stack in containers
 services:
   db:
     image: postgres:17-alpine
@@ -24,6 +23,25 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: solugen-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # The only value that differs between running locally and running in Compose:
+      # inside this network the database is reachable as `db`, not `localhost`.
+      # Overriding it here is what lets a single .env serve both modes.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+    ports:
+      - '${PORT:-4000}:${PORT:-4000}'
 
 volumes:
   postgres_data:
