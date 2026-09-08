@@ -35,7 +35,7 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
  * type guard for a route that was wired up without the middleware, not a runtime path
  * that can be reached through the router.
  */
-export function getAuthenticatedUserId(req: Request): string {
+export function getAuthenticatedUserId(req: { userId?: string }): string {
   if (!req.userId) {
     throw ApiError.unauthorized();
   }
