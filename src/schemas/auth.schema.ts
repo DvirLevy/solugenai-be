@@ -35,5 +35,29 @@ export const loginSchema = z.object({
   rememberMe: z.boolean().default(false),
 });
 
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+});
+
+/**
+ * Public by design: the user has just received a temporary password by email and cannot
+ * sign in yet, so the temporary password itself is the credential that authorises the
+ * change. `confirmPassword` is optional — the spec asks for a confirmation "where
+ * applicable", and no client currently sends one — but it is checked when present.
+ */
+export const changePasswordSchema = z
+  .object({
+    email: emailSchema,
+    tempPassword: z.string().min(1, 'Temporary password is required.'),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().optional(),
+  })
+  .refine(
+    (data) => data.confirmPassword === undefined || data.confirmPassword === data.newPassword,
+    { message: 'Passwords do not match.', path: ['confirmPassword'] },
+  );
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
