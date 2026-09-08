@@ -67,7 +67,7 @@ export const config = {
 
   accessToken: {
     secret: env.JWT_SECRET,
-    expiresIn: env.ACCESS_TOKEN_EXPIRATION,
+    expiresIn: durationToMs(env.ACCESS_TOKEN_EXPIRATION),
     expiresInMs: durationToMs(env.ACCESS_TOKEN_EXPIRATION),
   },
 
