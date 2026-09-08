@@ -1,0 +1,29 @@
+# All configuration is read from the single .env file in this directory.
+# The `backend` service is added in a later task; `db` is defined now so the
+# database can be run on its own:
+#
+#   docker compose up -d db     # PostgreSQL only, backend runs locally
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: solugen-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the companion <POSTGRES_DB>_test database used by the Jest suite.
+      # Runs only on first initialisation of an empty volume.
+      - ./docker/init-test-db.sh:/docker-entrypoint-initdb.d/init-test-db.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
