@@ -15,7 +15,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "docker": "docker compose up --build"
+    "docker": "docker compose up --build",
+    "docker:db": "docker compose up -d db"
   },
   "dependencies": {
     "@prisma/client": "^6.19.1",
